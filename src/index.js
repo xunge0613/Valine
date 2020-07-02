@@ -20,7 +20,7 @@ const locales = {
     'zh-cn': {
         head: {
             nick: '昵称',
-            mail: '邮箱',
+            mail: '邮箱(必填)',
             link: '网址(http://)',
         },
         tips: {
@@ -140,7 +140,9 @@ ValineFactory.prototype._init = function(){
             path = location.pathname,
             pageSize,
             recordIP,
-            clazzName = 'Comment'
+            clazzName = 'Comment',
+            requireReview = false, // 默认不需要人工审核
+            banKeywords, // 前端检测禁用关键词，默认不启用
         } = root.config;
         root['config']['path'] = path.replace(/index\.html?$/, '');
         root['config']['clazzName'] = clazzName;
@@ -208,6 +210,41 @@ ValineFactory.prototype._init = function(){
                 serverURLs: serverURLs,
             });
         } catch (ex) { }
+
+        // get ban keywords resourcd url
+        let banKeywordsUrl = ""; // 加载远程 ban keywords 优化性能
+        switch (banKeywords) {
+          case undefined:
+            break;
+          case "default":
+            banKeywordsUrl = "http://localhost:1313/keywords.json"
+            break;
+          case (banKeywords.match(/^https?:\/\/.+/) || {}).input:
+            banKeywordsUrl = banKeywords;
+            break;
+          default:
+            // 非法链接
+            break;
+        }
+        // get ban keywords data and set 
+        if (banKeywordsUrl) {
+          // 发请求获取
+          let xhr = new XMLHttpRequest();
+          xhr.open('GET', banKeywordsUrl, true);
+          xhr.send();
+          xhr.onreadystatechange = function (e) {
+            if (xhr.readyState == 4 && xhr.status == 200) {
+              try {
+                if(xhr.response) {
+                  let keywords = JSON.parse(xhr.response)
+                  root.bannedKeywords = keywords.data;
+                } 
+              } catch (error) {
+                console.warn(error);
+              }
+            }
+          };
+        }  
 
         // get comment count
         let els = Utils.findAll(document, '.valine-comment-count');
@@ -832,6 +869,23 @@ ValineFactory.prototype.bind = function (option) {
         root.preview.empty().hide();
     }
 
+    /**
+     * 检测内容是否包含屏蔽词
+     * @param {*} content 评论内容 / 评论昵称
+     */
+    let checkBanKeywords = (content) => {
+      // 设置为不需要屏蔽，或屏蔽词列表为空
+      if(!root.bannedKeywords || root.bannedKeywords.length === 0) {
+        return "";
+      }
+      // 匹配禁用词
+      if(root.bannedKeywords && root.bannedKeywords.length > 0) {
+        const result = root.bannedKeywords.find(item => content.includes(item))
+        // document.title =  "" + result; test
+        return result;
+      }
+    }
+
     // submitsubmit
     let submitBtn = Utils.find(root.el, '.vsubmit');
     let submitEvt = (e) => {
@@ -851,10 +905,24 @@ ValineFactory.prototype.bind = function (option) {
             inputs['mail'].focus();
             return;
         }
-        if (defaultComment['comment'] == '') {
+        
+        if (defaultComment['comment'] === '') {
+            // 改为 === 用户可能输入 0
             inputs['comment'].focus();
             return;
         }
+
+        // 增加关键词屏蔽
+        const checkBanKeywordsResult = (checkBanKeywords(defaultComment['nick']) || checkBanKeywords(defaultComment['comment']));
+        if (checkBanKeywordsResult) {
+          root.alert.show({
+            type: 0,
+            text: `评论中不可以包含"${checkBanKeywordsResult}"哦ヾ(๑╹◡╹)ﾉ"`,
+            ctxt: root.locale['ctrl']['ok']
+          })
+          return;
+        }
+
         defaultComment['nick'] = defaultComment['nick'] || 'Anonymous';
 
         // return;
